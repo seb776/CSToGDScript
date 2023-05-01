@@ -150,6 +150,22 @@ namespace CSToGDScript
             else if (type.GetType() == typeof(ArrayTypeSyntax))
             {
                 var arrayType = type as ArrayTypeSyntax;
+                if (arrayType.ElementType.GetType() == typeof(PredefinedTypeSyntax))
+                {
+                    var identArrayType = arrayType.ElementType as PredefinedTypeSyntax;
+                    if (identArrayType.Keyword.Text.ToLower() == "string")
+                    {
+                        return "PackedStringArray";
+                    }
+                    else if (identArrayType.Keyword.Text.ToLower() == "int")
+                    {
+                        return "PackedInt32Array";
+                    }
+                    else if (identArrayType.Keyword.Text.ToLower() == "float")
+                    {
+                        return "PackedFloatArray";
+                    }
+                }
                 return "Array";
             }
             else if (type.GetType() == typeof(GenericNameSyntax))
