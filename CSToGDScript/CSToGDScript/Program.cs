@@ -1,0 +1,2 @@
+﻿
+CSToGDScript.CSToGDScript.HandleProgram();
