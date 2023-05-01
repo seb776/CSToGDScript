@@ -26,56 +26,296 @@ namespace CSToGDScript
         {
 
         }
+        // https://docs.godotengine.org/en/latest/tutorials/scripting/c_sharp/c_sharp_differences.html#random-functions
+        static string HandleSyntaxToken(SyntaxToken token)
+        {
+            Dictionary<string, string> godotFunctions = new Dictionary<string, string>()
+            {
+                { "GetNode", "get_node" },
+                { "GetViewport", "get_viewport" },
+                { "QueueFree", "queue_free" },
+                { "_Ready", "_ready" },
+                { "_Process", "_process" },
+                { "_PhysicsProcess", "_physics_process" },
+                { "Text", "text" }, // Not idea as it can trigger use names too but would need to do a bit of semantic along the way to handle that properly
+                { "GetTree", "get_tree" },
+                { "GetChildren", "get_children"},
+                { "RandRange", "rand_range" },
+                { "Print", "print" },
+                { "Prints", "prints" },
+                { "Printt", "printt" },
+                { "PrintRaw", "printraw" },
+                { "PrintErr", "printerr" },
+                { "PrintRich", "print_rich" },
+                { "Load", "load" },
+                { "RemoveChild", "remove_child" },
+
+                { "IsActionPressed", "is_action_pressed" },
+                { "IsActionReleased", "is_action_released" },
+                { "IsActionJustPressed", "is_action_just_pressed" },
+                { "IsActionJustReleased", "is_action_just_released" },
+                { "GetAxis", "get_axis" },
 
 
+                { "Min", "min" },
+                { "Max", "max" },
+                { "Clamp", "clamp" },
+                { "Lerp", "lerp" },
+
+                { "Cos", "cos" },
+                { "Sin", "sin" },
+                { "Cosh", "cosh" },
+                { "Sinh", "sinh" },
+                { "Tan", "tan" },
+                { "Tanh", "tanh" },
+                { "Exp", "exp" },
+                { "Log", "log" },
+                { "Pow", "pow" },
+                { "Sqrt", "sqrt" },
+                { "Floor", "floor" },
+                { "Ceil", "ceil" },
+                { "Round", "round" },
+            };
+            string res = token.Text;
+            string output = "";
+            if (godotFunctions.TryGetValue(token.Text, out output))
+                res = output;
+            return res;
+        }
 
         public static string HandleType(TypeSyntax type)
         {
+            if (type == null) return "";
             if (type.GetType() == typeof(IdentifierNameSyntax))
-                return (type as IdentifierNameSyntax).Identifier.Text;
-            if (type.GetType() == typeof(PredefinedTypeSyntax))
+                return HandleSyntaxToken((type as IdentifierNameSyntax).Identifier);
+            else if (type.GetType() == typeof(PredefinedTypeSyntax))
                 return (type as PredefinedTypeSyntax).Keyword.Text;
+            else if (type.GetType() == typeof(ArrayTypeSyntax))
+            {
+                var arrayType = type as ArrayTypeSyntax;
+                return "Array";
+            }
+            else if (type.GetType() == typeof(GenericNameSyntax))
+            {
+                var genericType = type as GenericNameSyntax;
+                if (genericType.Identifier.Text == "List")
+                    return "Array";
+                return genericType.Identifier.Text;
+            }
+            else if(type.GetType() == typeof(QualifiedNameSyntax))
+            {
+                var qualifiedType = type as QualifiedNameSyntax;
+                return qualifiedType.ToString();
+
+            }
+            else
+            {
+
+            }
             return "";
         }
 
-        public static void HandleExpression(ExpressionSyntax expr, StringBuilder sb)
+        public static void HandleArgumentList(BaseArgumentListSyntax list, StringBuilder sb)
         {
+            foreach (var arg in list.Arguments)
+            {
+                HandleExpression(arg.Expression, sb);
+                if (arg != list.Arguments.Last())
+                    sb.Append(", ");
+            }
+        }
+        public static async void HandleExpression(ExpressionSyntax expr, StringBuilder sb, TypeSyntax inferedType = null)
+        {
+            if (expr == null) return;
+            Dictionary<string, string> mapUnaryOperators = new Dictionary<string, string>()
+                {
+                    {"++", " += 1" },
+                    {"--", " -= 1" },
+                };
             if (expr.GetType() == typeof(InvocationExpressionSyntax))
             {
                 var invocExpr = expr as InvocationExpressionSyntax;
                 HandleExpression(invocExpr.Expression, sb);
-                sb.Append("(");
-                foreach (var arg in invocExpr.ArgumentList.Arguments)
-                {
-                    HandleExpression(arg.Expression, sb);
-                    if (arg != invocExpr.ArgumentList.Arguments.Last())
-                        sb.Append(", ");
-                }
-                sb.Append(")");
+
+                bool handleToString = expr.ToString().Contains("ToString");
+                if (!handleToString)
+                    sb.Append("(");
+                HandleArgumentList(invocExpr.ArgumentList, sb);
+                if (!handleToString)
+                    sb.Append(")");
             }
-            if (expr.GetType() == typeof(MemberAccessExpressionSyntax))
+            else if (expr.GetType() == typeof(MemberAccessExpressionSyntax))
             {
                 var accessExpr = expr as MemberAccessExpressionSyntax;
-                HandleExpression(accessExpr.Expression, sb);
-                sb.Append(accessExpr.Name.Identifier.Text);
+                var accessAsIdentifierName = accessExpr.Expression as IdentifierNameSyntax;
+                if (accessExpr.Name.Identifier.Text == "ToString")
+                {
+                    sb.Append("str(");
+                    HandleExpression(accessExpr.Expression, sb);
+                    sb.Append(")");
+                }
+                else if (accessAsIdentifierName!= null &&
+                    (accessAsIdentifierName.Identifier.Text == "GD" ||
+                    accessAsIdentifierName.Identifier.Text == "Mathf" ||
+                    accessAsIdentifierName.Identifier.Text == "Math"))
+                {
+                    sb.Append(HandleSyntaxToken(accessExpr.Name.Identifier));
+                }
+                else
+                {
+                    HandleExpression(accessExpr.Expression, sb);
+                    sb.Append(".");
+                    sb.Append(HandleSyntaxToken(accessExpr.Name.Identifier));
+                }
                 //accessExpr
                 //accessExpr.Expression
             }
-            if (expr.GetType() == typeof(ThisExpressionSyntax))
+            else if (expr.GetType() == typeof(ThisExpressionSyntax))
             {
                 var thisExpr = expr as ThisExpressionSyntax;
-                sb.Append("self.");
+                sb.Append("self");
+            }
+            else if (expr.GetType() == typeof(AssignmentExpressionSyntax))
+            {
+                var assignExpr = expr as AssignmentExpressionSyntax;
+                HandleExpression(assignExpr.Left, sb);
+                sb.Append(" = ");
+                HandleExpression(assignExpr.Right, sb);
+            }
+            else if (expr.GetType() == typeof(IdentifierNameSyntax))
+            {
+                var identifierExpr = expr as IdentifierNameSyntax;
+                sb.Append(HandleSyntaxToken(identifierExpr.Identifier));
+            }
+            else if (expr.GetType() == typeof(LiteralExpressionSyntax))
+            {
+                var literalExpr = expr as LiteralExpressionSyntax;
+                sb.Append(literalExpr.Token.Text);
+            }
+            else if (expr.GetType() == typeof(GenericNameSyntax))
+            {
+                var genericNameExpr = expr as GenericNameSyntax; // GetNode<Type> has no equivalent in python
+                sb.Append(HandleSyntaxToken(genericNameExpr.Identifier));
+            }
+            else if (expr.GetType() == typeof(ArrayCreationExpressionSyntax))
+            {
+                var arrayCreateExpr = expr as ArrayCreationExpressionSyntax;
+                sb.Append("[");
+                HandleExpression(arrayCreateExpr.Initializer, sb);
+                sb.Append("]");
+            }
+            else if (expr.GetType() == typeof(BinaryExpressionSyntax))
+            {
+                var binaryExpr = expr as BinaryExpressionSyntax;
+                HandleExpression(binaryExpr.Left, sb);
+                sb.Append(" ").Append(HandleSyntaxToken(binaryExpr.OperatorToken)).Append(" ");
+                HandleExpression(binaryExpr.Right, sb);
+            }
+            else if (expr.GetType() == typeof(PrefixUnaryExpressionSyntax))
+            {
+                var unaryExpr = expr as PrefixUnaryExpressionSyntax;
+                sb.Append(unaryExpr.OperatorToken);
+                HandleExpression(unaryExpr.Operand, sb);
+            }
+            else if (expr.GetType() == typeof(InitializerExpressionSyntax))
+            {
+                var initializerExpr = expr as InitializerExpressionSyntax;
+                foreach (var val in initializerExpr.Expressions)
+                {
+                    HandleExpression(val, sb);
+                    if (val != initializerExpr.Expressions.Last())
+                        sb.Append(", ");
+                }
+            }
+            else if (expr.GetType() == typeof(ObjectCreationExpressionSyntax))
+            {
+                var objCreateExpr = expr as ObjectCreationExpressionSyntax;
+                sb.Append("new ");
+                sb.Append(HandleType(objCreateExpr.Type));
+                sb.Append("(");
+                HandleArgumentList(objCreateExpr.ArgumentList, sb);
+                sb.Append(")");
+            }
+            else if (expr.GetType() == typeof(CastExpressionSyntax))
+            {
+                var castExpr = expr as CastExpressionSyntax;
+                sb.Append("(");
+                HandleExpression(castExpr.Expression, sb);
+                sb.Append(" as ");
+                sb.Append(HandleType(castExpr.Type));
+                sb.Append(")");
+            }
+            else if (expr.GetType() == typeof(ParenthesizedExpressionSyntax))
+            {
+                var parenthExpr = expr as ParenthesizedExpressionSyntax;
+                sb.Append("(");
+                HandleExpression(parenthExpr.Expression, sb);
+                sb.Append(")");
+            }
+            else if (expr.GetType() == typeof(ImplicitObjectCreationExpressionSyntax))
+            {
+                var implicitExpr = expr as ImplicitObjectCreationExpressionSyntax;
+                sb.Append("new ");
+                sb.Append(HandleType(inferedType));
+                sb.Append("(");
+                HandleArgumentList(implicitExpr.ArgumentList, sb);
+                sb.Append(")");
+            }
+            else if(expr.GetType() == typeof(ElementAccessExpressionSyntax))
+            {
+                var elementAccessExpr = expr as ElementAccessExpressionSyntax;
+                HandleExpression(elementAccessExpr.Expression, sb);
+                sb.Append("[");
+                HandleArgumentList(elementAccessExpr.ArgumentList, sb); // Will generated invalid gdscript if [a,b]
+                sb.Append("]");
+            }
+            else if (expr.GetType() == typeof(PostfixUnaryExpressionSyntax))
+            {
+                var postFixExpr = expr as PostfixUnaryExpressionSyntax;
+                Dictionary<string, string> mapOperators = new Dictionary<string, string>()
+                {
+                    {"++", " += 1" },
+                    {"--", " -= 1" },
+                };
+                HandleExpression(postFixExpr.Operand, sb);
+                string newOp = "";
+                if (mapUnaryOperators.TryGetValue(postFixExpr.OperatorToken.Text, out newOp))
+                    sb.Append(newOp);
+                else
+                    sb.Append(postFixExpr.OperatorToken);
+            }
+            else if (expr.GetType() == typeof(PrefixUnaryExpressionSyntax))
+            {
+                var postFixExpr = expr as PostfixUnaryExpressionSyntax;
+
+                HandleExpression(postFixExpr.Operand, sb);
+                string newOp = "";
+                if (mapUnaryOperators.TryGetValue(postFixExpr.OperatorToken.Text, out newOp))
+                    sb.Append(newOp);
+                else
+                    sb.Append(postFixExpr.OperatorToken);
+            }
+            else if (expr.GetType() == typeof(AwaitExpressionSyntax))
+            {
+                var awaitExpr = expr as AwaitExpressionSyntax;
+                sb.Append("await ");
+                HandleExpression(awaitExpr.Expression, sb);
+            }
+            else
+            {
+
             }
         }
-
+        public static void HandleInitialize(EqualsValueClauseSyntax equals, StringBuilder sb, TypeSyntax inferedType)
+        {
+            sb.Append(" = ");
+            HandleExpression(equals.Value, sb, inferedType);
+        }
         public static void HandlePropertyDeclarationSyntax(PropertyDeclarationSyntax decl, StringBuilder sb, int depth)
         {
-            sb.Append($@"@export var {decl.Identifier.Text}: {HandleType(decl.Type)}");
+            sb.Append($@"var {decl.Identifier.Text}: {HandleType(decl.Type)}");
             if (decl.Initializer != null)
-            {
-                sb.Append(" = ");
-                HandleExpression(decl.Initializer.Value, sb);
-            }
+                HandleInitialize(decl.Initializer, sb, decl.Type);
             sb.AppendLine();
         }
         public static void HandleStatementSyntax(StatementSyntax stmt, StringBuilder sb, int depth)
@@ -90,27 +330,109 @@ namespace CSToGDScript
                     HandleStatementSyntax(subStmt, sb, depth + 1);
                 }
             }
-            if (stmt.GetType() == typeof(ExpressionStatementSyntax))
+            else if (stmt.GetType() == typeof(ExpressionStatementSyntax))
             {
                 var exprStmt = stmt as ExpressionStatementSyntax;
                 sb.AppendTabs(depth);
                 HandleExpression(exprStmt.Expression, sb);
                 sb.AppendLine();
             }
+            else if (stmt.GetType() == typeof(ReturnStatementSyntax))
+            {
+                var retStmt = stmt as ReturnStatementSyntax;
+                sb.AppendTabs(depth).Append("return ");
+                HandleExpression(retStmt.Expression, sb);
+                sb.AppendLine();
+            }
+            else if (stmt.GetType() == typeof(IfStatementSyntax))
+            {
+                var ifStmt = stmt as IfStatementSyntax;
+                sb.AppendTabs(depth);
+                sb.Append("if ");
+                HandleExpression(ifStmt.Condition, sb);
+                sb.AppendLine(":");
+                HandleStatementSyntax(ifStmt.Statement, sb, depth);
+            }
+            else if (stmt.GetType() == typeof(LocalDeclarationStatementSyntax))
+            {
+                var localDeclStmt = stmt as LocalDeclarationStatementSyntax;
+                HandleVariableDeclarationSyntax(localDeclStmt.Declaration, sb, depth);
+            }
+            else if (stmt.GetType() == typeof(SwitchStatementSyntax))
+            {
+                var switchStmt = stmt as SwitchStatementSyntax;
+                sb.AppendTabs(depth);
+                sb.Append("match ");
+                HandleExpression(switchStmt.Expression, sb);
+                sb.AppendLine(":");
+                foreach (var clause in switchStmt.Sections)
+                {
+                    sb.AppendTabs(depth + 1);
+                    foreach (var label in clause.Labels)
+                    {
+                        if (label.GetType() == typeof(CaseSwitchLabelSyntax))
+                        {
+                            var caseSwitch = label as CaseSwitchLabelSyntax;
+                            HandleExpression(caseSwitch.Value, sb);
+                            sb.AppendLine(":");
+                        }
+                    }
+                    foreach (var stmtSwitch in clause.Statements)
+                    {
+                        HandleStatementSyntax(stmtSwitch, sb, depth + 2);
+                    }
+                }
+            }
+            else if (stmt.GetType() == typeof(BreakStatementSyntax))
+            {
+                sb.AppendTabs(depth).AppendLine("break");
+            }
+            else if (stmt.GetType() == typeof(ContinueStatementSyntax))
+            {
+                sb.AppendTabs(depth).AppendLine("continue");
+            }
+            else if (stmt.GetType() == typeof(ForStatementSyntax))
+            {
+                var forStmt = stmt as ForStatementSyntax;
+                HandleVariableDeclarationSyntax(forStmt.Declaration, sb, depth);
+                sb.AppendTabs(depth);
+                sb.Append("while ");
+                HandleExpression(forStmt.Condition, sb);
+                sb.AppendLine(":");
+                HandleStatementSyntax(forStmt.Statement, sb, depth);
+                foreach(var incrementor in forStmt.Incrementors)
+                {
+                    sb.AppendTabs(depth + 2);
+                    HandleExpression(incrementor, sb);
+                    sb.AppendLine();
+                }
+            }
+            else if (stmt.GetType() == typeof(WhileStatementSyntax))
+            {
+                var whileStmt = stmt as WhileStatementSyntax; 
+                sb.AppendTabs(depth);
+                sb.Append("while ");
+                HandleExpression(whileStmt.Condition, sb);
+                sb.AppendLine(":");
+                HandleStatementSyntax(whileStmt.Statement, sb, depth);
+            }
+            else if (stmt.GetType() == typeof(ForEachStatementSyntax))
+            {
+                var foreachStmt = stmt as ForEachStatementSyntax;
+                sb.AppendTabs(depth);
+                sb.Append("for ");
+                sb.Append(HandleSyntaxToken(foreachStmt.Identifier));
+                sb.Append(" in ");
+                HandleExpression(foreachStmt.Expression, sb);
+                sb.AppendLine(":");
+                HandleStatementSyntax(foreachStmt.Statement, sb, depth);
+            }
         }
 
 
         public static void HandleMethodDeclarationSyntax(MethodDeclarationSyntax decl, StringBuilder sb, int depth)
         {
-            HashSet<string> gdFunctions = new HashSet<string>
-            {
-                "_Ready",
-                "_Process",
-                "_PhysicsProcess"
-            };
-            string funcName = decl.Identifier.Text;
-            if (gdFunctions.Contains(funcName))
-                funcName = funcName.ToLower();
+            string funcName = HandleSyntaxToken(decl.Identifier);
             sb.AppendTabs(depth).Append($@"func {funcName}(");
             foreach (var param in decl.ParameterList.Parameters)
             {
@@ -119,16 +441,58 @@ namespace CSToGDScript
                     sb.Append(", ");
             }
 
-            sb.AppendLine("):");
+            sb.Append(") -> ");
+            sb.Append(HandleType(decl.ReturnType));
+            sb.AppendLine(":");
             HandleStatementSyntax(decl.Body, sb, depth);
+        }
+        public static void HandleVariableDeclarationSyntax(VariableDeclarationSyntax var, StringBuilder sb, int depth)
+        {
+            sb.AppendTabs(depth).Append("var ");
+            foreach (var var_ in var.Variables)
+            {
+                sb.Append(HandleSyntaxToken(var_.Identifier));
+                sb.Append(":").Append(HandleType(var.Type)); // Will probably produce wrong things but gdscript does not support multi variable declarations
+                if (var_.Initializer != null)
+                    HandleInitialize(var_.Initializer, sb, var.Type);
+                if (var_ != var.Variables.Last())
+                    sb.Append(", ");
+            }
+            sb.AppendLine();
+        }
+        public static string HandleNameSyntax(NameSyntax name)
+        {
+            if (name.GetType() == typeof(IdentifierNameSyntax))
+            {
+                var ident = (IdentifierNameSyntax)name;
+                return ident.Identifier.Text.ToLower();
+            }
+            return "UNKNOWN";
         }
         public static void HandleMemberDeclarationSyntax(MemberDeclarationSyntax decl, StringBuilder sb, int depth)
         {
+            foreach (var attrs in decl.AttributeLists)
+            {
+                foreach (var attr in attrs.Attributes)
+                {
+                    //attr.Name.Ide
+                    sb.AppendTabs(depth);
+                    sb.Append("@");
+                    sb.Append(HandleNameSyntax(attr.Name));
+                    sb.AppendLine();
+                }
+            }
 
             if (decl.GetType() == typeof(PropertyDeclarationSyntax))
                 HandlePropertyDeclarationSyntax(decl as PropertyDeclarationSyntax, sb, depth);
-            if (decl.GetType() == typeof(MethodDeclarationSyntax))
+            else if (decl.GetType() == typeof(MethodDeclarationSyntax))
                 HandleMethodDeclarationSyntax(decl as MethodDeclarationSyntax, sb, depth);
+            else if (decl.GetType() == typeof(FieldDeclarationSyntax))
+            {
+                var fieldDecl = decl as FieldDeclarationSyntax;
+                HandleVariableDeclarationSyntax(fieldDecl.Declaration, sb, depth);
+            }
+            sb.AppendLine();
             //Console.WriteLine(decl);
 
         }
@@ -183,6 +547,13 @@ namespace CSToGDScript
                     Console.WriteLine(gdScriptPath);
                     var gdScriptCode = TranspileFile(file);
                     File.WriteAllText(gdScriptPath, gdScriptCode);
+
+                    var origBack = Console.BackgroundColor;
+                    Console.WriteLine();
+                    Console.BackgroundColor = ConsoleColor.Green;
+                    Console.Write("=======================================================");
+                    Console.BackgroundColor = origBack;
+                    Console.WriteLine();
                     Console.WriteLine(gdScriptCode);
                 }
             }
@@ -195,7 +566,7 @@ namespace CSToGDScript
 
         public static void HandleProgram()
         {
-            string folderPath = "C:\\Users\\s.maire\\Desktop\\ldjam-53-green";
+            string folderPath = "E:\\z0rg\\Projects\\Perso\\Ludum53\\ldjam-53-green";
 
             BrowseFiles(folderPath);
         }
