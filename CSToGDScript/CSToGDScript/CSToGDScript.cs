@@ -34,6 +34,11 @@ namespace CSToGDScript
         {
             Dictionary<string, string> godotFunctions = new Dictionary<string, string>()
             {
+                { "Transform", "self.Transform" }, // Meh
+                { "GetVector", "get_vector" },
+                { "GetSetting", "get_setting" },
+                { "SetSetting", "set_setting" },
+                { "HasSetting", "has_setting" },
                 { "GetNode", "get_node" },
                 { "GetViewport", "get_viewport" },
                 { "GetCamera2D", "get_camera_2d" },
@@ -58,7 +63,7 @@ namespace CSToGDScript
                 { "PrintRich", "print_rich" },
                 { "Load", "preload" },
                 { "RemoveChild", "remove_child" },
-                { "Color", "color" },
+                { "Color", "Color" },
                 { "Position", "position" },
                 { "X", "x" },
                 { "Y", "y" },
@@ -85,11 +90,12 @@ namespace CSToGDScript
                 { "Show", "show" },
                 { "Start", "start" },
                 { "WaitTime", "wait_time" },
-                
+
                 { "Min", "min" },
                 { "Max", "max" },
                 { "Clamp", "clamp" },
                 { "Lerp", "lerp" },
+                { "Slerp", "slerp" },
                 { "Play", "play"},
                 { "MoveAndSlide", "move_and_slide"},
                 { "Velocity", "velocity"},
@@ -109,6 +115,7 @@ namespace CSToGDScript
                 {"Texture", "texture" },
 
                 { "Scale", "scale"},
+                { "Abs", "abs" },
                 { "Cos", "cos" },
                 { "Sin", "sin" },
                 { "Cosh", "cosh" },
@@ -122,6 +129,8 @@ namespace CSToGDScript
                 { "Floor", "floor" },
                 { "Ceil", "ceil" },
                 { "Round", "round" },
+
+                { "CsgMesh3D", "CSGMesh3D" },
             };
             string res = token.Text;
             string output = "";
@@ -134,7 +143,7 @@ namespace CSToGDScript
         {
             if (type == null) return "";
             if (type.GetType() == typeof(IdentifierNameSyntax))
-                return (type as IdentifierNameSyntax).Identifier.Text;
+                return HandleSyntaxToken((type as IdentifierNameSyntax).Identifier);
             else if (type.GetType() == typeof(PredefinedTypeSyntax))
             {
                 var predefType = (type as PredefinedTypeSyntax).Keyword.Text;
@@ -206,6 +215,7 @@ namespace CSToGDScript
                     {"++", " += 1" },
                     {"--", " -= 1" },
                 };
+            
             if (expr.GetType() == typeof(InvocationExpressionSyntax))
             {
                 var invocExpr = expr as InvocationExpressionSyntax;
@@ -220,7 +230,9 @@ namespace CSToGDScript
             }
             else if (expr.GetType() == typeof(MemberAccessExpressionSyntax))
             {
+                
                 var accessExpr = expr as MemberAccessExpressionSyntax;
+                
                 var accessAsIdentifierName = accessExpr.Expression as IdentifierNameSyntax;
                 if (accessExpr.Name.Identifier.Text == "ToString")
                 {
@@ -250,6 +262,11 @@ namespace CSToGDScript
             {
                 var thisExpr = expr as ThisExpressionSyntax;
                 sb.Append("self");
+            }
+            else if (expr.GetType() == typeof(BaseExpressionSyntax))
+            {
+                var baseExpr = expr as BaseExpressionSyntax;
+                sb.Append("super");                
             }
             else if (expr.GetType() == typeof(AssignmentExpressionSyntax))
             {
@@ -417,7 +434,10 @@ namespace CSToGDScript
         public static void HandleStatementSyntax(StatementSyntax stmt, StringBuilder sb, int depth)
         {
             if (stmt == null)
+            {
                 sb.AppendTabs(depth).AppendLine("pass");
+                return;
+            }
             if (stmt.GetType() == typeof(BlockSyntax))
             {
                 var block = stmt as BlockSyntax;
@@ -490,7 +510,9 @@ namespace CSToGDScript
             }
             else if (stmt.GetType() == typeof(BreakStatementSyntax))
             {
-                sb.AppendTabs(depth).AppendLine("break");
+                var breakStmt = stmt as BreakStatementSyntax;
+                if (breakStmt.Parent.GetType() != typeof(SwitchStatementSyntax)) // No breaks in python switches
+                    sb.AppendTabs(depth).AppendLine("break");
             }
             else if (stmt.GetType() == typeof(ContinueStatementSyntax))
             {
@@ -608,9 +630,13 @@ namespace CSToGDScript
         {
             // class decl +extends baseclass https://docs.godotengine.org/fr/stable/tutorials/scripting/gdscript/gdscript_basics.html
 
-            var firstBase = class_.BaseList.Types.First();
-            if (firstBase != null)
-                sb.AppendLine($@"extends {HandleType(firstBase.Type)}");
+            if (class_.BaseList != null)
+            {
+                var firstBase = class_.BaseList.Types.First();
+                if (firstBase != null)
+                    sb.AppendLine($@"extends {HandleType(firstBase.Type)}");
+            }
+
             if (!class_.Identifier.Text.Contains("Manager"))
                 sb.AppendLine($@"class_name {class_.Identifier.Text}"); // No class name on singletons
             foreach (var decl in class_.Members)
@@ -626,6 +652,8 @@ namespace CSToGDScript
             {
                 if (member.GetType() == typeof(ClassDeclarationSyntax))
                     HandleClassDecl(member as ClassDeclarationSyntax, sb, depth);
+                if (member.GetType() == typeof(NamespaceDeclarationSyntax)) // We ignore namespaces
+                    HandleDecls((member as NamespaceDeclarationSyntax).Members, sb, depth);
             }
 
         }
@@ -752,8 +780,8 @@ namespace CSToGDScript
         public static void HandleProgram()
         {
             string sourcePath
-                = "E:\\z0rg\\Projects\\Perso\\Ludum53\\ldjam-53-green";
-            string folderPath = "E:\\z0rg\\Projects\\Perso\\Ludum53\\Ludum53-green-gdscript";
+                = "C:\\Users\\sebas\\Documents\\Projects\\ldjam-54-silver";
+            string folderPath = "C:\\Users\\sebas\\Documents\\Projects\\ldjam-54-silver-gdscript";
             EmptyFolderExceptGit(folderPath);
             CopyFilesRecursively(sourcePath, folderPath);
 
