@@ -34,6 +34,7 @@ namespace CSToGDScript
         {
             Dictionary<string, string> godotFunctions = new Dictionary<string, string>()
             {
+                {"ProcessMode", "process_mode" },
                 { "Transform", "self.Transform" }, // Meh
                 { "GetVector", "get_vector" },
                 { "GetSetting", "get_setting" },
@@ -112,7 +113,11 @@ namespace CSToGDScript
                 { "Down", "DOWN" },
                 { "Left", "LEFT" },
                 { "Right", "RIGHT" },
+                { "Forward", "FORWARD" },
+                { "Backward", "BACKWARD" },
                 {"Texture", "texture" },
+
+                { "Randi", "randi"},
 
                 { "Scale", "scale"},
                 { "Abs", "abs" },
@@ -215,7 +220,7 @@ namespace CSToGDScript
                     {"++", " += 1" },
                     {"--", " -= 1" },
                 };
-            
+
             if (expr.GetType() == typeof(InvocationExpressionSyntax))
             {
                 var invocExpr = expr as InvocationExpressionSyntax;
@@ -230,9 +235,9 @@ namespace CSToGDScript
             }
             else if (expr.GetType() == typeof(MemberAccessExpressionSyntax))
             {
-                
+
                 var accessExpr = expr as MemberAccessExpressionSyntax;
-                
+
                 var accessAsIdentifierName = accessExpr.Expression as IdentifierNameSyntax;
                 if (accessExpr.Name.Identifier.Text == "ToString")
                 {
@@ -248,6 +253,10 @@ namespace CSToGDScript
                     accessAsIdentifierName.Identifier.Text == "ResourceLoader"))
                 {
                     sb.Append(HandleSyntaxToken(accessExpr.Name.Identifier));
+                }
+                else if (accessAsIdentifierName != null && accessAsIdentifierName.Identifier.Text == "ProcessModeEnum")
+                {
+                    sb.Append($"PROCESS_MODE_{accessExpr.Name.Identifier.Text.ToUpper()}");
                 }
                 else
                 {
@@ -266,7 +275,7 @@ namespace CSToGDScript
             else if (expr.GetType() == typeof(BaseExpressionSyntax))
             {
                 var baseExpr = expr as BaseExpressionSyntax;
-                sb.Append("super");                
+                sb.Append("super");
             }
             else if (expr.GetType() == typeof(AssignmentExpressionSyntax))
             {
@@ -344,8 +353,12 @@ namespace CSToGDScript
                 var castExpr = expr as CastExpressionSyntax;
                 sb.Append("(");
                 HandleExpression(castExpr.Expression, sb);
-                sb.Append(" as ");
-                sb.Append(HandleType(castExpr.Type));
+                var typeName = HandleType(castExpr.Type);
+                if (!typeName.ToLower().Contains("enum")) // TODO Yeah dirty // We don't need to cast enum to int
+                {
+                    sb.Append(" as ");
+                    sb.Append(typeName);
+                }
                 sb.Append(")");
             }
             else if (expr.GetType() == typeof(ParenthesizedExpressionSyntax))
@@ -411,6 +424,15 @@ namespace CSToGDScript
                     var access = awaitInvoc.ArgumentList.Arguments.Last().ToString().Replace("\"", "");
                     sb.Append(access);
                 }
+            }
+            else if (expr.GetType() == typeof(ConditionalExpressionSyntax))
+            {
+                var condExpr = expr as ConditionalExpressionSyntax;
+                HandleExpression(condExpr.WhenTrue, sb);
+                sb.Append(" if ");
+                HandleExpression(condExpr.Condition, sb);
+                sb.Append(" else ");
+                HandleExpression(condExpr.WhenFalse, sb);
             }
             else
             {
@@ -511,7 +533,8 @@ namespace CSToGDScript
             else if (stmt.GetType() == typeof(BreakStatementSyntax))
             {
                 var breakStmt = stmt as BreakStatementSyntax;
-                if (breakStmt.Parent.GetType() != typeof(SwitchStatementSyntax)) // No breaks in python switches
+
+                if (stmt.Parent.GetType() != typeof(SwitchSectionSyntax)) // No breaks in python switches
                     sb.AppendTabs(depth).AppendLine("break");
             }
             else if (stmt.GetType() == typeof(ContinueStatementSyntax))
@@ -644,16 +667,33 @@ namespace CSToGDScript
                 HandleMemberDeclarationSyntax(decl, sb, depth);
             }
         }
-
-
-        public static void HandleDecls(SyntaxList<MemberDeclarationSyntax> decls, StringBuilder sb, int depth)
+        public static void HandleEnumDecl(EnumDeclarationSyntax enum_, StringBuilder sb, int depth)
         {
+            sb.Append($"enum {HandleSyntaxToken(enum_.Identifier)} {{");
+            foreach (var decl in enum_.Members)
+            {
+
+                sb.Append($"{HandleSyntaxToken(decl.Identifier)}");
+                if (decl != enum_.Members.Last())
+                    sb.Append(", ");
+            }
+            sb.AppendLine("}");
+        }
+
+        public static void HandleDecls(SyntaxList<MemberDeclarationSyntax> decls_, StringBuilder sb, int depth)
+        {
+            var decls = decls_.ToList();
+            decls.Sort((a, b) => {
+                return a.GetType() == typeof(EnumDeclarationSyntax) ? 1 : 0;
+            });
             foreach (var member in decls)
             {
                 if (member.GetType() == typeof(ClassDeclarationSyntax))
                     HandleClassDecl(member as ClassDeclarationSyntax, sb, depth);
                 if (member.GetType() == typeof(NamespaceDeclarationSyntax)) // We ignore namespaces
                     HandleDecls((member as NamespaceDeclarationSyntax).Members, sb, depth);
+                if (member.GetType() == typeof(EnumDeclarationSyntax))
+                    HandleEnumDecl(member as EnumDeclarationSyntax, sb, depth);
             }
 
         }

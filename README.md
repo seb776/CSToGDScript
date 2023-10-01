@@ -13,3 +13,9 @@ In the middle of the jam we decided to build to check everything was alright, an
 The other idea that came was, why not looking if there exist a tool to automate that ? We did note found anything usable, then we thought, well, why not write it ourselves ? That’s how we decided to create a transpiler to transform C# to GDScript. Hopefully both languages are really close semantically, also their typing system works almost the same. The thing works and is opensourced so give it a shot and do PR and post issues !
 
 Our game is currently built with the following process : Godot4.0 C# → CSToGDScript → Godot4.0 GDScript → Web 😀
+
+# Known issues
+- Some Identifier (godot APIs) are string-replaced in a non intelligent way this can have side effects
+
+# Ideas
+- Detect .Net exclusive APIs (port some ?)
