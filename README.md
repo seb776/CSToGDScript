@@ -16,6 +16,11 @@ Our game is currently built with the following process : Godot4.0 C# → CSToGDS
 
 # Known issues
 - Some Identifier (godot APIs) are string-replaced in a non intelligent way this can have side effects
+- It does not support multiple class in the same file
+- It does not support multiple enums in the same file
+- It does not support value assign for enums
+- Enums are poorly handled
+- Cannot name variable same as type
 
 # Ideas
 - Detect .Net exclusive APIs (port some ?)

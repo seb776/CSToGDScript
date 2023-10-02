@@ -30,12 +30,38 @@ namespace CSToGDScript
 
         }
         // https://docs.godotengine.org/en/latest/tutorials/scripting/c_sharp/c_sharp_differences.html#random-functions
-        static string HandleSyntaxToken(SyntaxToken token)
+        static string HandleSyntaxToken(SyntaxToken token, bool isNotType = false)
         {
             Dictionary<string, string> godotFunctions = new Dictionary<string, string>()
             {
-                {"ProcessMode", "process_mode" },
-                { "Transform", "self.Transform" }, // Meh
+
+                {"GetOverlappingAreas", "get_overlapping_areas" },
+                {"ResourcePath", "resource_path" },
+                {"Playing", "playing" },
+                {"SetCollisionMaskValue", "set_collision_mask_value" },
+                {"GetFrameTexture", "get_frame_texture" },
+                {"SpriteFrames", "sprite_frames" },
+                {"Set", "set" },
+                {"IsZeroApprox", "is_zero_approx" },
+                {"Basis", "basis" },
+                {"BodyEntered", "body_entered" },
+                {"Stream", "stream" },
+                {"HasOverlappingAreas", "has_overlapping_areas" },
+                {"IsOnFloor", "is_on_floor" },
+                {"Stop", "stop" },
+                {"MaterialOverride", "material_override" },
+                {"Frame", "frame" },
+                {"HasOverlappingBodies", "has_overlapping_bodies" },
+                {"GetOverlappingBodies", "get_overlapping_bodies" },
+                {"GetTicksMsec", "get_ticks_msec" },
+                {"VolumeDb", "volume_db" },
+                {"AddRange", "append_array" },
+                {"GetNodesInGroup", "get_nodes_in_group" },
+                {"Select", "map" }, // Replace c# array Select to gdscript map
+                {"GetParent", "get_parent" },
+                { "FindChild", "find_child" },
+                { "ProcessMode", "process_mode" },
+                { "Transform", "transform" }, // Meh
                 { "GetVector", "get_vector" },
                 { "GetSetting", "get_setting" },
                 { "SetSetting", "set_setting" },
@@ -46,6 +72,7 @@ namespace CSToGDScript
                 { "GlobalPosition", "global_position" },
                 { "GlobalRotation", "global_rotation" },
                 { "QueueFree", "queue_free" },
+                {"_Input", "_input" },
                 { "_Ready", "_ready" },
                 { "_Process", "_process" },
                 { "_PhysicsProcess", "_physics_process" },
@@ -115,7 +142,7 @@ namespace CSToGDScript
                 { "Right", "RIGHT" },
                 { "Forward", "FORWARD" },
                 { "Backward", "BACKWARD" },
-                {"Texture", "texture" },
+                { "Texture", "texture" },
 
                 { "Randi", "randi"},
 
@@ -141,6 +168,9 @@ namespace CSToGDScript
             string output = "";
             if (godotFunctions.TryGetValue(token.Text, out output))
                 res = output;
+            res = res.Replace("@", "at"); // GDScript interprets @ but not C#
+            if (isNotType && res.ToLower().Contains("enum"))
+                res = res + "." + res; // dirty hack to handle enum export easily
             return res;
         }
 
@@ -206,12 +236,19 @@ namespace CSToGDScript
         {
             foreach (var arg in list.Arguments)
             {
-                HandleExpression(arg.Expression, sb);
+                HandleExpression(arg.Expression, sb, 0);
                 if (arg != list.Arguments.Last())
                     sb.Append(", ");
             }
         }
-        public static async void HandleExpression(ExpressionSyntax expr, StringBuilder sb, TypeSyntax inferedType = null)
+        // Checks if contains "" (not ideal but enough for now)
+        // Would require a semantic check
+        static bool IsStringExpression(string text)
+        {
+            return text.Contains("\"");
+        }
+
+        public static async void HandleExpression(ExpressionSyntax expr, StringBuilder sb, int depth, TypeSyntax inferedType = null)
         {
             if (expr == null) return;
 
@@ -221,17 +258,62 @@ namespace CSToGDScript
                     {"--", " -= 1" },
                 };
 
+            var strExpr = expr.ToString();
+
+            if (strExpr.ToString().Contains("base."))
+                return; // In godot 4 we do not call base methods this is done auto
+            //if (strExpr.ToString() == "Transform.Basis")
+            //{
+            //    sb.Append("self.Transform.Basis");
+            //    return;
+            //}
+
             if (expr.GetType() == typeof(InvocationExpressionSyntax))
             {
                 var invocExpr = expr as InvocationExpressionSyntax;
-                HandleExpression(invocExpr.Expression, sb);
+                StringBuilder sbInvocExpr = new StringBuilder();
+                HandleExpression(invocExpr.Expression, sbInvocExpr, depth);
+                if (sbInvocExpr.ToString() == "print") // We bypass prints as it may contain some string / object concats that we cannot trivially convert
+                {
+                }
+                else
+                {
+                    sb.Append(sbInvocExpr.ToString());
 
-                bool handleToString = expr.ToString().Contains("ToString");
-                if (!handleToString)
-                    sb.Append("(");
-                HandleArgumentList(invocExpr.ArgumentList, sb);
-                if (!handleToString)
-                    sb.Append(")");
+                    bool ignoreFunctions = expr.ToString().Contains("ToString") || expr.ToString().Contains("AsSingle");
+                    if (!ignoreFunctions)
+                    {
+                        sb.Append("(");
+                        HandleArgumentList(invocExpr.ArgumentList, sb);
+                        sb.Append(")");
+                    }
+                }
+            }
+            else if (expr.GetType() == typeof(ParenthesizedLambdaExpressionSyntax))
+            {
+                var lambdaExpr = expr as ParenthesizedLambdaExpressionSyntax;
+                sb.Append("func(");
+                HandleParametersList(lambdaExpr.ParameterList, sb);
+                sb.Append("): ");
+                if (lambdaExpr.ExpressionBody != null)
+                    HandleExpression(lambdaExpr.ExpressionBody, sb, depth);
+                else
+                    HandleStatementSyntax(lambdaExpr.Block, sb, depth + 1);
+            }
+            else if (expr.GetType() == typeof(SimpleLambdaExpressionSyntax))
+            {
+                var lambdaExpr = expr as SimpleLambdaExpressionSyntax;
+                sb.Append("func(");
+                //lambdaExpr.
+                sb.Append(HandleSyntaxToken(lambdaExpr.Parameter.Identifier, true));
+                sb.Append("): ");
+                if (lambdaExpr.ExpressionBody != null)
+                {
+                    sb.Append("return ");
+                    HandleExpression(lambdaExpr.ExpressionBody, sb, depth);
+                }
+                else
+                    HandleStatementSyntax(lambdaExpr.Block, sb, depth + 1);
             }
             else if (expr.GetType() == typeof(MemberAccessExpressionSyntax))
             {
@@ -242,8 +324,12 @@ namespace CSToGDScript
                 if (accessExpr.Name.Identifier.Text == "ToString")
                 {
                     sb.Append("str(");
-                    HandleExpression(accessExpr.Expression, sb);
+                    HandleExpression(accessExpr.Expression, sb, depth);
                     sb.Append(")");
+                }
+                if (accessExpr.Name.Identifier.Text == "AsSingle")
+                {
+                    HandleExpression(accessExpr.Expression, sb, depth);
                 }
                 else if (accessAsIdentifierName != null &&
                     (accessAsIdentifierName.Identifier.Text == "GD" ||
@@ -252,7 +338,7 @@ namespace CSToGDScript
                     accessAsIdentifierName.Identifier.Text == "Math" ||
                     accessAsIdentifierName.Identifier.Text == "ResourceLoader"))
                 {
-                    sb.Append(HandleSyntaxToken(accessExpr.Name.Identifier));
+                    sb.Append(HandleSyntaxToken(accessExpr.Name.Identifier, true));
                 }
                 else if (accessAsIdentifierName != null && accessAsIdentifierName.Identifier.Text == "ProcessModeEnum")
                 {
@@ -260,9 +346,9 @@ namespace CSToGDScript
                 }
                 else
                 {
-                    HandleExpression(accessExpr.Expression, sb);
+                    HandleExpression(accessExpr.Expression, sb, depth);
                     sb.Append(".");
-                    sb.Append(HandleSyntaxToken(accessExpr.Name.Identifier));
+                    sb.Append(HandleSyntaxToken(accessExpr.Name.Identifier, true));
                 }
                 //accessExpr
                 //accessExpr.Expression
@@ -281,14 +367,42 @@ namespace CSToGDScript
             {
                 var assignExpr = expr as AssignmentExpressionSyntax;
 
-                HandleExpression(assignExpr.Left, sb);
-                sb.Append(" ").Append(assignExpr.OperatorToken).Append(" ");
-                HandleExpression(assignExpr.Right, sb);
+                HashSet<string> signalsValues = new HashSet<string>()
+                {
+                    "BodyEntered"
+                };
+
+                
+                Func<bool> containsSignal = () =>
+                {
+                    foreach (var signal in signalsValues)
+                    {
+                        if (strExpr.Contains(signal))
+                            return true;
+                    }
+                    return false;
+                };
+
+                if (assignExpr.OperatorToken.ToString() == "+=" && containsSignal())
+                {
+                    StringBuilder sbLeft = new StringBuilder();
+                    HandleExpression(assignExpr.Left, sbLeft, depth);
+                    StringBuilder sbRight = new StringBuilder();
+                    HandleExpression(assignExpr.Right, sbRight, depth);
+                    sb.Append($"{sbLeft.ToString()}.connect({sbRight})");
+                }
+                else
+                {
+                    HandleExpression(assignExpr.Left, sb, depth);
+
+                    sb.Append(" ").Append(assignExpr.OperatorToken).Append(" ");
+                    HandleExpression(assignExpr.Right, sb, depth);
+                }
             }
             else if (expr.GetType() == typeof(IdentifierNameSyntax))
             {
                 var identifierExpr = expr as IdentifierNameSyntax;
-                sb.Append(HandleSyntaxToken(identifierExpr.Identifier));
+                sb.Append(HandleSyntaxToken(identifierExpr.Identifier, true));
             }
             else if (expr.GetType() == typeof(LiteralExpressionSyntax))
             {
@@ -307,34 +421,60 @@ namespace CSToGDScript
             else if (expr.GetType() == typeof(GenericNameSyntax))
             {
                 var genericNameExpr = expr as GenericNameSyntax; // GetNode<Type> has no equivalent in python
-                sb.Append(HandleSyntaxToken(genericNameExpr.Identifier));
+                sb.Append(HandleSyntaxToken(genericNameExpr.Identifier, true));
             }
             else if (expr.GetType() == typeof(ArrayCreationExpressionSyntax))
             {
                 var arrayCreateExpr = expr as ArrayCreationExpressionSyntax;
-                sb.Append("[");
-                HandleExpression(arrayCreateExpr.Initializer, sb);
-                sb.Append("]");
+
+
+
+                if (arrayCreateExpr.Initializer != null)
+                {
+                    sb.Append("[");
+                    HandleExpression(arrayCreateExpr.Initializer, sb, depth);
+                    sb.Append("]");
+                }
+                else
+                {
+                    var arraySize = arrayCreateExpr.Type.RankSpecifiers.First().Sizes.First();
+                    StringBuilder sbSize = new StringBuilder();
+                    HandleExpression(arraySize, sbSize, depth);
+                    sb.Append($"createArray({sbSize.ToString()})");
+                }
             }
             else if (expr.GetType() == typeof(BinaryExpressionSyntax))
             {
                 var binaryExpr = expr as BinaryExpressionSyntax;
-                HandleExpression(binaryExpr.Left, sb);
-                sb.Append(" ").Append(HandleSyntaxToken(binaryExpr.OperatorToken)).Append(" ");
-                HandleExpression(binaryExpr.Right, sb);
+                StringBuilder sbLeft = new StringBuilder();
+                HandleExpression(binaryExpr.Left, sbLeft, depth);
+                var operator_ = HandleSyntaxToken(binaryExpr.OperatorToken, true);
+                StringBuilder sbRight = new StringBuilder();
+                HandleExpression(binaryExpr.Right, sbRight, depth);
+                // Below is a dirty hack to handle string concat
+                string stringifyBefore = "";
+                string stringifyAfter = "";
+                if (operator_ == "+" && IsStringExpression(sbLeft.ToString()) || IsStringExpression(sbRight.ToString()))
+                {
+                    stringifyBefore = "str(";
+                    stringifyAfter = ")";
+                }
+                sb.Append(stringifyBefore).Append(sbLeft.ToString()).Append(stringifyAfter);
+                sb.Append(" ").Append(operator_).Append(" ");
+                sb.Append(stringifyBefore).Append(sbRight.ToString()).Append(stringifyAfter);
             }
             else if (expr.GetType() == typeof(PrefixUnaryExpressionSyntax))
             {
                 var unaryExpr = expr as PrefixUnaryExpressionSyntax;
                 sb.Append(unaryExpr.OperatorToken);
-                HandleExpression(unaryExpr.Operand, sb);
+                HandleExpression(unaryExpr.Operand, sb, depth);
             }
             else if (expr.GetType() == typeof(InitializerExpressionSyntax))
             {
                 var initializerExpr = expr as InitializerExpressionSyntax;
                 foreach (var val in initializerExpr.Expressions)
                 {
-                    HandleExpression(val, sb);
+                    HandleExpression(val, sb, depth);
                     if (val != initializerExpr.Expressions.Last())
                         sb.Append(", ");
                 }
@@ -343,16 +483,50 @@ namespace CSToGDScript
             {
                 var objCreateExpr = expr as ObjectCreationExpressionSyntax;
                 //sb.Append("new ");
-                sb.Append(HandleType(objCreateExpr.Type));
-                sb.Append("(");
-                HandleArgumentList(objCreateExpr.ArgumentList, sb);
-                sb.Append(")");
+                var typeText = HandleType(objCreateExpr.Type);
+                if (typeText == "Array")
+                {
+                    sb.Append("[]");
+                }
+                else if (typeText == "Dictionary")
+                {
+                    sb.Append("{");
+                    if (objCreateExpr.Initializer != null)
+                    {
+                        foreach (var val in objCreateExpr.Initializer.Expressions)
+                        {
+                            if (val.GetType() == typeof(InitializerExpressionSyntax))
+                            {
+                                var initExpr = val as InitializerExpressionSyntax;
+                                HandleExpression(initExpr.Expressions.First(), sb, depth);
+                                sb.Append(": ");
+                                HandleExpression(initExpr.Expressions.Last(), sb , depth);
+                            }
+                            if (val != objCreateExpr.Initializer.Expressions.Last())
+                                sb.Append(", ");
+                        }
+
+                    }
+                    sb.Append("}");
+                }
+                else
+                {
+                    sb.Append(typeText);
+                    if (typeText == "Vector2" || typeText == "Vector3" || typeText == "Vector4")
+                    {
+                    }
+                    else
+                        sb.Append(".new");
+                    sb.Append("(");
+                    HandleArgumentList(objCreateExpr.ArgumentList, sb);
+                    sb.Append(")");
+                }
             }
             else if (expr.GetType() == typeof(CastExpressionSyntax))
             {
                 var castExpr = expr as CastExpressionSyntax;
                 sb.Append("(");
-                HandleExpression(castExpr.Expression, sb);
+                HandleExpression(castExpr.Expression, sb, depth);
                 var typeName = HandleType(castExpr.Type);
                 if (!typeName.ToLower().Contains("enum")) // TODO Yeah dirty // We don't need to cast enum to int
                 {
@@ -365,7 +539,7 @@ namespace CSToGDScript
             {
                 var parenthExpr = expr as ParenthesizedExpressionSyntax;
                 sb.Append("(");
-                HandleExpression(parenthExpr.Expression, sb);
+                HandleExpression(parenthExpr.Expression, sb, depth);
                 sb.Append(")");
             }
             else if (expr.GetType() == typeof(ImplicitObjectCreationExpressionSyntax))
@@ -380,7 +554,7 @@ namespace CSToGDScript
             else if (expr.GetType() == typeof(ElementAccessExpressionSyntax))
             {
                 var elementAccessExpr = expr as ElementAccessExpressionSyntax;
-                HandleExpression(elementAccessExpr.Expression, sb);
+                HandleExpression(elementAccessExpr.Expression, sb, depth);
                 sb.Append("[");
                 HandleArgumentList(elementAccessExpr.ArgumentList, sb); // Will generated invalid gdscript if [a,b]
                 sb.Append("]");
@@ -393,7 +567,7 @@ namespace CSToGDScript
                     {"++", " += 1" },
                     {"--", " -= 1" },
                 };
-                HandleExpression(postFixExpr.Operand, sb);
+                HandleExpression(postFixExpr.Operand, sb, depth);
                 string newOp = "";
                 if (mapUnaryOperators.TryGetValue(postFixExpr.OperatorToken.Text, out newOp))
                     sb.Append(newOp);
@@ -404,7 +578,7 @@ namespace CSToGDScript
             {
                 var postFixExpr = expr as PostfixUnaryExpressionSyntax;
 
-                HandleExpression(postFixExpr.Operand, sb);
+                HandleExpression(postFixExpr.Operand, sb, depth);
                 string newOp = "";
                 if (mapUnaryOperators.TryGetValue(postFixExpr.OperatorToken.Text, out newOp))
                     sb.Append(newOp);
@@ -419,7 +593,7 @@ namespace CSToGDScript
                 var awaitInvoc = awaitExpr.Expression as InvocationExpressionSyntax;
                 if (awaitInvoc != null)
                 {
-                    HandleExpression(awaitInvoc.ArgumentList.Arguments.First().Expression, sb);
+                    HandleExpression(awaitInvoc.ArgumentList.Arguments.First().Expression, sb, depth);
                     sb.Append(".");
                     var access = awaitInvoc.ArgumentList.Arguments.Last().ToString().Replace("\"", "");
                     sb.Append(access);
@@ -428,11 +602,19 @@ namespace CSToGDScript
             else if (expr.GetType() == typeof(ConditionalExpressionSyntax))
             {
                 var condExpr = expr as ConditionalExpressionSyntax;
-                HandleExpression(condExpr.WhenTrue, sb);
+                HandleExpression(condExpr.WhenTrue, sb, depth);
                 sb.Append(" if ");
-                HandleExpression(condExpr.Condition, sb);
+                HandleExpression(condExpr.Condition, sb, depth);
                 sb.Append(" else ");
-                HandleExpression(condExpr.WhenFalse, sb);
+                HandleExpression(condExpr.WhenFalse, sb, depth);
+            }
+            else if (expr.GetType() == typeof(ConditionalAccessExpressionSyntax))
+            {
+                // TODO Too hard to handle now
+                //var condExpr = (ConditionalAccessExpressionSyntax)expr;
+                //sb.Append($"coalesce___({condExpr.Expression}, ");
+                //HandleExpression(condExpr.WhenNotNull, sb, depth);
+                //sb.Append(")");
             }
             else
             {
@@ -442,15 +624,66 @@ namespace CSToGDScript
         public static void HandleInitialize(EqualsValueClauseSyntax equals, StringBuilder sb, TypeSyntax inferedType)
         {
             sb.Append(" = ");
-            HandleExpression(equals.Value, sb, inferedType);
+            HandleExpression(equals.Value, sb, 0, inferedType);
+        }
+
+        static string HandleVarDecl(SyntaxToken name, TypeSyntax type, EqualsValueClauseSyntax? init)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append($@"var {HandleSyntaxToken(name)}");
+            var typeText = HandleType(type);
+            if (typeText.ToLower().Contains("enum"))
+            {
+                sb.Append(": int");
+            }
+            else if (typeText != "var")
+                sb.Append($": {typeText}"); // TODO array init
+
+            StringBuilder sbInit = new StringBuilder();
+            if (init != null)
+            {
+                HandleInitialize(init, sbInit, type);
+                if (typeText == "Array" && sbInit.ToString().EndsWith("null")) // Cannot init array to null in gdscript
+                {
+                    sbInit.Clear();
+                    sbInit.Append("= []");
+                }
+
+            }
+            sb.Append(sbInit.ToString());
+            return sb.ToString();
+        }
+        public static void HandleAccessor(string accessor, ExpressionSyntax body, StringBuilder sb, int depth)
+        {
+
+            sb.AppendLine("");
+            sb.AppendTabs(depth + 1).Append($"{accessor}:").AppendLine();
+            sb.AppendTabs(depth + 2);
+            if (accessor == "get")
+                sb.Append("return ");
+            HandleExpression(body, sb, depth + 1);
         }
         public static void HandlePropertyDeclarationSyntax(PropertyDeclarationSyntax decl, StringBuilder sb, int depth)
         {
-            sb.Append($@"var {decl.Identifier.Text}");
-            if (HandleType(decl.Type) != "var")
-                sb.Append($": {HandleType(decl.Type)}");
-            if (decl.Initializer != null)
-                HandleInitialize(decl.Initializer, sb, decl.Type);
+            sb.Append(HandleVarDecl(decl.Identifier, decl.Type, decl.Initializer));
+            if (decl.AccessorList != null)
+            {
+                sb.Append(":");
+                foreach (var accessor in decl.AccessorList.Accessors)
+                {
+                    var outputAccessor = accessor.Keyword.ToString();
+                    if (outputAccessor == "set")
+                        outputAccessor = "set(value)";
+                    HandleAccessor(outputAccessor, accessor.ExpressionBody.Expression, sb, depth);
+                    
+                }
+            }
+            if (decl.ExpressionBody != null)
+            {
+                sb.Append(":");
+                HandleAccessor("get", decl.ExpressionBody.Expression, sb, depth);
+            }
+            
             sb.AppendLine();
         }
         public static void HandleStatementSyntax(StatementSyntax stmt, StringBuilder sb, int depth)
@@ -474,14 +707,14 @@ namespace CSToGDScript
             {
                 var exprStmt = stmt as ExpressionStatementSyntax;
                 sb.AppendTabs(depth);
-                HandleExpression(exprStmt.Expression, sb);
+                HandleExpression(exprStmt.Expression, sb, depth);
                 sb.AppendLine();
             }
             else if (stmt.GetType() == typeof(ReturnStatementSyntax))
             {
                 var retStmt = stmt as ReturnStatementSyntax;
                 sb.AppendTabs(depth).Append("return ");
-                HandleExpression(retStmt.Expression, sb);
+                HandleExpression(retStmt.Expression, sb, depth);
                 sb.AppendLine();
             }
             else if (stmt.GetType() == typeof(IfStatementSyntax))
@@ -489,7 +722,7 @@ namespace CSToGDScript
                 var ifStmt = stmt as IfStatementSyntax;
                 sb.AppendTabs(depth);
                 sb.Append("if ");
-                HandleExpression(ifStmt.Condition, sb);
+                HandleExpression(ifStmt.Condition, sb, depth);
                 sb.AppendLine(":");
                 HandleStatementSyntax(ifStmt.Statement, sb, depth + 1);
                 if (ifStmt.Else != null)
@@ -510,7 +743,7 @@ namespace CSToGDScript
                 var switchStmt = stmt as SwitchStatementSyntax;
                 sb.AppendTabs(depth);
                 sb.Append("match ");
-                HandleExpression(switchStmt.Expression, sb);
+                HandleExpression(switchStmt.Expression, sb, depth);
                 sb.AppendLine(":");
                 foreach (var clause in switchStmt.Sections)
                 {
@@ -520,7 +753,7 @@ namespace CSToGDScript
                         if (label.GetType() == typeof(CaseSwitchLabelSyntax))
                         {
                             var caseSwitch = label as CaseSwitchLabelSyntax;
-                            HandleExpression(caseSwitch.Value, sb);
+                            HandleExpression(caseSwitch.Value, sb, depth);
                             sb.AppendLine(":");
                         }
                     }
@@ -547,13 +780,13 @@ namespace CSToGDScript
                 HandleVariableDeclarationSyntax(forStmt.Declaration, sb, depth);
                 sb.AppendTabs(depth);
                 sb.Append("while ");
-                HandleExpression(forStmt.Condition, sb);
+                HandleExpression(forStmt.Condition, sb, depth);
                 sb.AppendLine(":");
                 HandleStatementSyntax(forStmt.Statement, sb, depth + 1);
                 foreach (var incrementor in forStmt.Incrementors)
                 {
                     sb.AppendTabs(depth + 1);
-                    HandleExpression(incrementor, sb);
+                    HandleExpression(incrementor, sb, depth + 1);
                     sb.AppendLine();
                 }
             }
@@ -562,7 +795,7 @@ namespace CSToGDScript
                 var whileStmt = stmt as WhileStatementSyntax;
                 sb.AppendTabs(depth);
                 sb.Append("while ");
-                HandleExpression(whileStmt.Condition, sb);
+                HandleExpression(whileStmt.Condition, sb, depth);
                 sb.AppendLine(":");
                 HandleStatementSyntax(whileStmt.Statement, sb, depth + 1);
             }
@@ -573,40 +806,74 @@ namespace CSToGDScript
                 sb.Append("for ");
                 sb.Append(HandleSyntaxToken(foreachStmt.Identifier));
                 sb.Append(" in ");
-                HandleExpression(foreachStmt.Expression, sb);
+                HandleExpression(foreachStmt.Expression, sb, depth + 1);
                 sb.AppendLine(":");
                 HandleStatementSyntax(foreachStmt.Statement, sb, depth + 1);
             }
+            else
+            {
+
+            }
         }
 
+        public static void HandleParametersList(ParameterListSyntax params_, StringBuilder sb)
+        {
+            foreach (var param in params_.Parameters)
+            {
+                sb.Append(HandleSyntaxToken(param.Identifier));
+                if (param.Default != null)
+                {
+                    sb.Append(":");
+                    HandleInitialize(param.Default, sb, null);
+                }
+                if (param != params_.Parameters.Last())
+                    sb.Append(", ");
+            }
+        }
+
+        /// <summary>
+        /// Handle MethodDeclarationSyntax and Contructor
+        /// </summary>
+        /// <param name="decl"></param>
+        /// <param name="sb"></param>
+        /// <param name="depth"></param>
+        public static void HandleFunctionDeclarationSyntax(ParameterListSyntax params_, BlockSyntax? body, ArrowExpressionClauseSyntax? exprBody, StringBuilder sb, int depth, string name = null, TypeSyntax returnType = null)
+        {
+            string funcName = name;
+            if (funcName == null)
+                funcName = "_init";
+            sb.AppendTabs(depth).Append($@"func {funcName}(");
+            HandleParametersList(params_, sb);
+
+            sb.Append(")");
+            if (name != null)
+            {
+                sb.Append(" -> ");
+                sb.Append(HandleType(returnType));
+            }
+            sb.AppendLine(":");
+            if (body != null)
+                HandleStatementSyntax(body, sb, depth + 1);
+            else
+            {
+                HandleStatementSyntax(SyntaxFactory.ReturnStatement(exprBody.Expression), sb, depth + 1);
+            }
+            sb.AppendTabs(depth + 1).Append("pass"); // To avoid some edge cases causing empty functions
+        }
 
         public static void HandleMethodDeclarationSyntax(MethodDeclarationSyntax decl, StringBuilder sb, int depth)
         {
             string funcName = HandleSyntaxToken(decl.Identifier);
-            sb.AppendTabs(depth).Append($@"func {funcName}(");
-            foreach (var param in decl.ParameterList.Parameters)
-            {
-                sb.Append(param.Identifier.Text);
-                if (param != decl.ParameterList.Parameters.Last())
-                    sb.Append(", ");
-            }
-
-            sb.Append(") -> ");
-            sb.Append(HandleType(decl.ReturnType));
-            sb.AppendLine(":");
-            HandleStatementSyntax(decl.Body, sb, depth + 1);
+            HandleFunctionDeclarationSyntax(decl.ParameterList, decl.Body, decl.ExpressionBody, sb, depth, funcName, decl.ReturnType);
         }
         public static void HandleVariableDeclarationSyntax(VariableDeclarationSyntax var, StringBuilder sb, int depth)
         {
-            sb.AppendTabs(depth).Append("var ");
+            sb.AppendTabs(depth);
             foreach (var var_ in var.Variables)
             {
-                sb.Append(HandleSyntaxToken(var_.Identifier));
-                if (HandleType(var.Type) != "var")
-                    sb.Append(":").Append(HandleType(var.Type)); // Will probably produce wrong things but gdscript does not support multi variable declarations
+                // Will probably produce wrong things but gdscript does not support multi variable declarations
+                sb.Append(HandleVarDecl(var_.Identifier, var.Type, var_.Initializer));
 
-                if (var_.Initializer != null)
-                    HandleInitialize(var_.Initializer, sb, var.Type);
                 if (var_ != var.Variables.Last())
                     sb.Append(", ");
             }
@@ -634,7 +901,6 @@ namespace CSToGDScript
                     sb.AppendLine();
                 }
             }
-
             if (decl.GetType() == typeof(PropertyDeclarationSyntax))
                 HandlePropertyDeclarationSyntax(decl as PropertyDeclarationSyntax, sb, depth);
             else if (decl.GetType() == typeof(MethodDeclarationSyntax))
@@ -643,6 +909,15 @@ namespace CSToGDScript
             {
                 var fieldDecl = decl as FieldDeclarationSyntax;
                 HandleVariableDeclarationSyntax(fieldDecl.Declaration, sb, depth);
+            }
+            else if (decl.GetType() == typeof(ConstructorDeclarationSyntax))
+            {
+                var ctorDecl = decl as ConstructorDeclarationSyntax;
+                HandleFunctionDeclarationSyntax(ctorDecl.ParameterList, ctorDecl.Body, ctorDecl.ExpressionBody, sb, depth);
+            }
+            else
+            {
+
             }
             sb.AppendLine();
             //Console.WriteLine(decl);
@@ -669,7 +944,10 @@ namespace CSToGDScript
         }
         public static void HandleEnumDecl(EnumDeclarationSyntax enum_, StringBuilder sb, int depth)
         {
-            sb.Append($"enum {HandleSyntaxToken(enum_.Identifier)} {{");
+            var identifier = enum_.Identifier.Text;// HandleSyntaxToken(enum_.Identifier.Text); // We do not want the HandleSyntaxToken here as we have a dirty trick to handle enum exports
+            // https://ask.godotengine.org/40827/how-to-declare-a-global-named-enum
+            sb.AppendLine($"class_name {identifier}"); // To have "global" enums (but it requires having one enum per file)
+            sb.Append($"enum {identifier} {{");
             foreach (var decl in enum_.Members)
             {
 
@@ -683,7 +961,8 @@ namespace CSToGDScript
         public static void HandleDecls(SyntaxList<MemberDeclarationSyntax> decls_, StringBuilder sb, int depth)
         {
             var decls = decls_.ToList();
-            decls.Sort((a, b) => {
+            decls.Sort((a, b) =>
+            {
                 return a.GetType() == typeof(EnumDeclarationSyntax) ? 1 : 0;
             });
             foreach (var member in decls)
@@ -706,6 +985,11 @@ namespace CSToGDScript
 
             StringBuilder sb = new StringBuilder();
             HandleDecls(root.Members, sb, 0);
+            sb.AppendLine("func createArray(size___):");
+            sb.Append("\t").AppendLine("var arr = []");
+            sb.Append("\t").AppendLine("arr.resize(size___)");
+            sb.Append("\t").AppendLine("return arr");
+            sb.AppendLine("");
 
             return sb.ToString();
         }
@@ -820,8 +1104,8 @@ namespace CSToGDScript
         public static void HandleProgram()
         {
             string sourcePath
-                = "C:\\Users\\sebas\\Documents\\Projects\\ldjam-54-silver";
-            string folderPath = "C:\\Users\\sebas\\Documents\\Projects\\ldjam-54-silver-gdscript";
+                = "E:\\z0rg\\Projects\\Perso\\Ludum54\\ldjam-54-silver";
+            string folderPath = "E:\\z0rg\\Projects\\Perso\\Ludum54\\ldjam-54-silver-gdscript";
             EmptyFolderExceptGit(folderPath);
             CopyFilesRecursively(sourcePath, folderPath);
 
